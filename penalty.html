@@ -415,16 +415,55 @@ const Pose={
 // easeOutBack — overshoots past 1 near the end, so limbs snap out and settle
 const backOut=(x)=>{const c=1.9; return 1+(c+1)*Math.pow(x-1,3)+c*Math.pow(x-1,2);};
 
-function makeFigure(skin,kit,isKeeper){
+function makeFigure(skin,kit,isKeeper,locale){
   const root=new THREE.Group();
   const sk=new THREE.MeshStandardMaterial({color:skin,roughness:.8});
-  const kt=new THREE.MeshStandardMaterial({color:kit,roughness:.7});
   const bt=new THREE.MeshStandardMaterial({color:0x14171b,roughness:.6});
   const gl=new THREE.MeshStandardMaterial({color:isKeeper?0x2b2f36:skin,roughness:.65});
   const M=(g,m)=>{const x=new THREE.Mesh(g,m);x.castShadow=true;return x;};
 
+  // --- kicker is always FC Barcelona (blaugrana + gold, #11 on the back) ---
+  const barcaRed=new THREE.MeshStandardMaterial({color:0xA50044,roughness:.7});
+  const barcaBlue=new THREE.MeshStandardMaterial({color:0x004D98,roughness:.7});
+  const barcaGold=new THREE.MeshStandardMaterial({color:0xEDBB00,roughness:.5,metalness:.3});
+  const shortsMat=new THREE.MeshStandardMaterial({color:0x004D98,roughness:.7});
+
+  // --- goalkeeper kit changes with the world ---
+  let goalieKit,goalieShorts,goalieGloves;
+  if(isKeeper){
+    if(locale==='moon'){
+      goalieKit=new THREE.MeshStandardMaterial({color:0x8a8a8a,roughness:.6});
+      goalieShorts=new THREE.MeshStandardMaterial({color:0x5a5a5a,roughness:.6});
+      goalieGloves=new THREE.MeshStandardMaterial({color:0xc0c0c0,roughness:.4,metalness:.5});
+    }else if(locale==='money'){
+      goalieKit=new THREE.MeshStandardMaterial({color:0x1a5c3a,roughness:.6});
+      goalieShorts=new THREE.MeshStandardMaterial({color:0x0d3d22,roughness:.6});
+      goalieGloves=new THREE.MeshStandardMaterial({color:0xFFD700,roughness:.3,metalness:.6});
+    }else{
+      goalieKit=new THREE.MeshStandardMaterial({color:0x0a1628,roughness:.6});
+      goalieShorts=new THREE.MeshStandardMaterial({color:0x070f1a,roughness:.6});
+      goalieGloves=new THREE.MeshStandardMaterial({color:0x00ffcc,roughness:.3,metalness:.4});
+    }
+  }
+
+  // number 11 painted on the back of the kicker's jersey
+  let jerseyBackMat;
+  if(!isKeeper){
+    const canvas=document.createElement('canvas'); canvas.width=256; canvas.height=256;
+    const ctx=canvas.getContext('2d');
+    ctx.fillStyle='#004D98'; ctx.fillRect(0,0,256,256);
+    ctx.fillStyle='#A50044';
+    for(let i=0;i<256;i+=64) ctx.fillRect(i,0,32,256);
+    ctx.fillStyle='#EDBB00'; ctx.font='bold 140px Arial';
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText('11',128,128);
+    ctx.strokeStyle='#FFFFFF'; ctx.lineWidth=4; ctx.strokeText('11',128,128);
+    jerseyBackMat=new THREE.MeshStandardMaterial({map:new THREE.CanvasTexture(canvas),roughness:.7});
+  }
+
   const pelvis=new THREE.Group(); pelvis.position.y=HIP_Y; root.add(pelvis);
-  pelvis.add(M(new THREE.CylinderGeometry(.24,.2,.2,10),kt));
+  const shortsMesh=M(new THREE.CylinderGeometry(.25,.22,.22,10), isKeeper?goalieShorts:shortsMat);
+  shortsMesh.position.y=-.02; pelvis.add(shortsMesh);
   const hips={},knees={},ankles={};
   [['L',-.135],['R',.135]].forEach(([s,x])=>{
     const hip=new THREE.Group(); hip.position.x=x; pelvis.add(hip);
@@ -438,23 +477,62 @@ function makeFigure(skin,kit,isKeeper){
     hips[s]=hip; knees[s]=knee; ankles[s]=ank;
   });
   const upper=new THREE.Group(); pelvis.add(upper);
-  const torso=M(new THREE.CylinderGeometry(.23,.21,.5,12),kt); torso.position.y=.31; upper.add(torso);
-  const chest=M(new THREE.SphereGeometry(.215,12,10),kt); chest.position.y=.5; chest.scale.set(1,.7,.72); upper.add(chest);
+  if(!isKeeper){
+    // striped torso + gold collar
+    const torsoGroup=new THREE.Group(); torsoGroup.position.y=.31; upper.add(torsoGroup);
+    torsoGroup.add(M(new THREE.CylinderGeometry(.23,.21,.5,12),barcaBlue));
+    for(let i=-1;i<=1;i++){
+      const stripe=M(new THREE.BoxGeometry(.08,.52,.38),barcaRed);
+      stripe.position.set(i*.12,0,.02); torsoGroup.add(stripe);
+    }
+    const backJersey=M(new THREE.CylinderGeometry(.231,.211,.5,12,1,true,Math.PI*.7,Math.PI*.6),jerseyBackMat);
+    backJersey.rotation.y=Math.PI; torsoGroup.add(backJersey);
+    const chestGroup=new THREE.Group(); chestGroup.position.y=.5; upper.add(chestGroup);
+    const chestBase=M(new THREE.SphereGeometry(.215,12,10),barcaBlue); chestBase.scale.set(1,.7,.72); chestGroup.add(chestBase);
+    for(let i=-1;i<=1;i++){
+      const chestStripe=M(new THREE.BoxGeometry(.07,.15,.33),barcaRed);
+      chestStripe.position.set(i*.12,0,.02); chestGroup.add(chestStripe);
+    }
+    const collar=M(new THREE.TorusGeometry(.08,.02,8,12,Math.PI),barcaGold);
+    collar.position.y=.65; collar.rotation.x=Math.PI/2; upper.add(collar);
+  }else{
+    const torso=M(new THREE.CylinderGeometry(.235,.215,.52,12),goalieKit); torso.position.y=.31; upper.add(torso);
+    const chest=M(new THREE.SphereGeometry(.22,12,10),goalieKit); chest.position.y=.5; chest.scale.set(1,.7,.72); upper.add(chest);
+    const gCollar=M(new THREE.TorusGeometry(.085,.022,8,12,Math.PI),new THREE.MeshStandardMaterial({color:0xFFFFFF,roughness:.5}));
+    gCollar.position.y=.65; gCollar.rotation.x=Math.PI/2; upper.add(gCollar);
+  }
   const neck=M(new THREE.CylinderGeometry(.065,.065,.1,8),sk); neck.position.y=.62; upper.add(neck);
   const head=M(new THREE.SphereGeometry(.185,16,14),sk); head.position.y=.78; upper.add(head);
   const nose=M(new THREE.BoxGeometry(.07,.07,.09),sk); nose.position.set(0,.76,-.17); upper.add(nose); // reads facing
   const shoulders={},elbows={},hands={};
   [['L',-.29],['R',.29]].forEach(([s,x])=>{
     const sho=new THREE.Group(); sho.position.set(x,.55,0); upper.add(sho);
-    const ua=new THREE.CylinderGeometry(.072,.06,UARM,8); ua.translate(0,-UARM/2,0); sho.add(M(ua,sk));
+    if(!isKeeper){
+      const sleeve=M(new THREE.CylinderGeometry(.075,.065,.12,8), s==='L'?barcaBlue:barcaRed);
+      sleeve.position.y=-.06; sho.add(sleeve);
+      const ua=new THREE.CylinderGeometry(.072,.06,UARM-.12,8); ua.translate(0,-(UARM-.12)/2-.12,0); sho.add(M(ua,sk));
+    }else{
+      const gSleeve=new THREE.CylinderGeometry(.076,.068,UARM,8); gSleeve.translate(0,-UARM/2,0); sho.add(M(gSleeve,goalieKit));
+    }
     const el=new THREE.Group(); el.position.y=-UARM; sho.add(el);
     el.add(M(new THREE.SphereGeometry(.062,8,6),sk));
-    const fa=new THREE.CylinderGeometry(.058,.05,FARM,8); fa.translate(0,-FARM/2,0); el.add(M(fa,sk));
+    if(!isKeeper){
+      const fa=new THREE.CylinderGeometry(.058,.05,FARM,8); fa.translate(0,-FARM/2,0); el.add(M(fa,sk));
+    }else{
+      const gFa=new THREE.CylinderGeometry(.06,.052,FARM,8); gFa.translate(0,-FARM/2,0); el.add(M(gFa,goalieKit));
+    }
     const wr=new THREE.Group(); wr.position.y=-FARM; el.add(wr);
-    const hg=isKeeper?new THREE.BoxGeometry(.15,.21,.075):new THREE.BoxGeometry(.1,.15,.055);
-    hg.translate(0,isKeeper?-.1:-.07,0); wr.add(M(hg,gl));
-    if(isKeeper){ const th=new THREE.BoxGeometry(.05,.1,.07);
-      th.translate(s==='L'?.09:-.09,-.06,0); wr.add(M(th,gl)); }
+    if(!isKeeper){
+      const hg=new THREE.BoxGeometry(.1,.15,.055); hg.translate(0,-.07,0); wr.add(M(hg,gl));
+    }else{
+      const gloveBase=new THREE.BoxGeometry(.18,.24,.08); gloveBase.translate(0,-.12,0); wr.add(M(gloveBase,goalieGloves));
+      for(let f=-1;f<=1;f++){
+        const finger=M(new THREE.BoxGeometry(.04,.08,.04),goalieGloves);
+        finger.position.set(f*.06,-.22,0); wr.add(finger);
+      }
+      const thumb=M(new THREE.BoxGeometry(.05,.06,.04),goalieGloves);
+      thumb.position.set(s==='L'?.1:-.1,-.18,.02); wr.add(thumb);
+    }
     shoulders[s]=sho; elbows[s]=el; hands[s]=wr;
   });
   root.userData.j={pelvis,upper,hips,knees,ankles,shoulders,elbows,hands};
@@ -595,7 +673,7 @@ function build(key){
     new THREE.MeshBasicMaterial({color:L.gold?0xa06e00:0x1b1f24,wireframe:true,transparent:true,opacity:.4})));
 
   W.kicker=makeFigure(L.gold?0xf0e2c0:0xd9dee3,L.gold?0xffd36b:0x2f6fe4,false); scene.add(W.kicker);
-  W.keeper=makeFigure(0xe8e4dc,L.gold?0x7a5200:0xe2483f,true);
+  W.keeper=makeFigure(0xe8e4dc,L.gold?0x7a5200:0xe2483f,true,key);
   W.keeper.rotation.y=Math.PI; scene.add(W.keeper);
 
   // arrow points +Z so lookAt(target) is exact and can never be mirrored.
