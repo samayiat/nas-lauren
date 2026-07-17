@@ -1,6 +1,9 @@
-/* Minimal service worker: caches the game shell so it installs and runs offline.
-   Bump CACHE to invalidate on new deploys. */
-const CACHE = 'spotkick-v2';
+/* Service worker for offline play WITHOUT going stale.
+   Network-first for same-origin requests: online visitors always get the
+   freshly deployed page, and the cache is only a fallback when offline.
+   (The previous cache-first strategy pinned everyone to an old build.)
+   Bump CACHE whenever this file changes so old caches are purged. */
+const CACHE = 'spotkick-v3';
 const ASSETS = [
   './', './index.html', './penalty.html',
   './manifest.webmanifest', './icon-192.png', './icon-512.png'
@@ -15,23 +18,23 @@ self.addEventListener('activate', e => {
   e.waitUntil(
     caches.keys().then(keys =>
       Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))
-    )
+    ).then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
-// Cache-first for same-origin GETs, falling back to network (and caching the
-// result). Cross-origin requests (e.g. the three.js CDN) pass straight through.
 self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET') return;
+  // Cross-origin (e.g. the three.js CDN) — let the browser handle it.
+  if (new URL(req.url).origin !== location.origin) return;
+  // Network-first: fetch fresh, refresh the cache, fall back to cache offline.
   e.respondWith(
-    caches.match(req).then(hit => hit || fetch(req).then(resp => {
-      if (resp && resp.ok && new URL(req.url).origin === location.origin) {
+    fetch(req).then(resp => {
+      if (resp && resp.ok) {
         const copy = resp.clone();
         caches.open(CACHE).then(c => c.put(req, copy)).catch(() => {});
       }
       return resp;
-    }).catch(() => caches.match('./index.html')))
+    }).catch(() => caches.match(req).then(hit => hit || caches.match('./index.html')))
   );
 });
