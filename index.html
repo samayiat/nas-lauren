@@ -481,15 +481,34 @@ function build(key){
 
   if(key==='money') buildMoney();
   if(key==='moon'){
-    const arr=new Float32Array(1600*3);
-    for(let i=0;i<1600;i++){const v=new THREE.Vector3(rnd(-1,1),rnd(-.05,1),rnd(-1,1)).normalize().multiplyScalar(160);
+    const arr=new Float32Array(2600*3);
+    for(let i=0;i<2600;i++){const v=new THREE.Vector3(rnd(-1,1),rnd(-.05,1),rnd(-1,1)).normalize().multiplyScalar(160);
       arr[i*3]=v.x;arr[i*3+1]=v.y;arr[i*3+2]=v.z;}
     const sg=new THREE.BufferGeometry(); sg.setAttribute('position',new THREE.BufferAttribute(arr,3));
-    scene.add(new THREE.Points(sg,new THREE.PointsMaterial({color:0xffffff,size:.55})));
+    scene.add(new THREE.Points(sg,new THREE.PointsMaterial({color:0xffffff,size:.5})));
     const dome=new THREE.Mesh(new THREE.SphereGeometry(240,40,28),
       new THREE.MeshBasicMaterial({map:nebulaTexture(),side:THREE.BackSide,
         fog:false,depthWrite:false}));
     scene.add(dome); W.dome=dome;
+
+    // ---- the aurora lights the ground -------------------------------------
+    // An overhead colour that drifts through the aurora hues and breathes, plus
+    // a hemisphere fill so the sky's colour actually washes across the regolith
+    // instead of the aurora being a painted backdrop the scene ignores.
+    const aur=new THREE.DirectionalLight(0x28ff9c,.0);
+    aur.position.set(2,16,-5); scene.add(aur); W.aur=aur;
+    const aurHemi=new THREE.HemisphereLight(0x28ff9c,0x140a22,.0); scene.add(aurHemi); W.aurHemi=aurHemi;
+    const AURC=[0x28ff9c,0x1ad0ff,0x3b7bff,0x9b3cff,0xff45b0,0xff8a3c];
+    const _ac=new THREE.Color(), _aw=new THREE.Color(0xffffff);
+    W.tickers.push((dt,t)=>{
+      const f=t*.06, i=Math.floor(f)%AURC.length, j=(i+1)%AURC.length, fr=f-Math.floor(f);
+      _ac.setHex(AURC[i]).lerp(_tmpCol.setHex(AURC[j]),fr);
+      const flick=.5+Math.sin(t*1.7)*.14+Math.sin(t*4.6)*.07+Math.sin(t*11.)*.03;
+      W.aur.color.copy(_ac); W.aur.intensity=Math.max(.08,flick*.8);
+      W.aurHemi.color.copy(_ac); W.aurHemi.intensity=Math.max(.05,flick*.5);
+      // gentle sky pulse — mostly the painted texture, a faint hue wash on top
+      W.dome.material.color.copy(_aw).lerp(_ac,.14+Math.sin(t*.8)*.06);
+    });
     buildRockets();
     const earth=new THREE.Mesh(new THREE.SphereGeometry(6,32,32),new THREE.MeshBasicMaterial({color:0x3a6fb0}));
     earth.position.set(-22,16,-60); scene.add(earth);
@@ -1016,35 +1035,99 @@ function buildMoney(){
   });
 }
 
+/* ---- Aurora borealis skydome ---------------------------------------------
+   Equirectangular: canvas top (v=0) is straight overhead, the middle row is
+   the horizon. The old version dropped a flat purple haze on the horizon and
+   left the zenith bare — so looking up (or watching the ball arc overhead)
+   you got a wash of dim violet and nothing else. This paints real aurora:
+   wavy vertical curtains in high-contrast green / cyan / blue / violet /
+   magenta / amber, hung from the zenith down toward the horizon, over a dense
+   star field. The curtains are drawn additively so overlaps bloom to white
+   cores the way a bright aurora actually does. ---- */
+const _tmpCol=new THREE.Color(), _tmpCol2=new THREE.Color();
+function rgba(col,a){
+  return `rgba(${(col.r*255)|0},${(col.g*255)|0},${(col.b*255)|0},${a})`;
+}
 function nebulaTexture(){
-  const W=1024,H=512;
+  const W=2048,H=1024;
   const c=document.createElement('canvas'); c.width=W; c.height=H;
   const x=c.getContext('2d');
-  x.fillStyle='#04050b'; x.fillRect(0,0,W,H);
+
+  // base sky — near-black at the zenith, a faint cool lift toward the horizon
+  const bg=x.createLinearGradient(0,0,0,H);
+  bg.addColorStop(0,'#02030a'); bg.addColorStop(.42,'#050617');
+  bg.addColorStop(.5,'#0a0a24'); bg.addColorStop(.62,'#050414');
+  bg.addColorStop(1,'#01020a');
+  x.fillStyle=bg; x.fillRect(0,0,W,H);
+
+  // ---- dense star field (drawn under the aurora so bright bands veil them) --
+  for(let i=0;i<3200;i++){
+    const sx=Math.random()*W, sy=Math.random()*H;
+    const big=Math.random()<.05;
+    const r=big?rnd(1.3,2.6):rnd(.35,1.1);
+    const a=big?rnd(.7,1):rnd(.25,.85);
+    // a few stars pick up a cold tint
+    const tint=Math.random();
+    x.fillStyle = tint<.08 ? `rgba(180,210,255,${a})`
+                : tint<.14 ? `rgba(255,225,205,${a})`
+                : `rgba(255,255,255,${a})`;
+    x.beginPath(); x.arc(sx,sy,r,0,7); x.fill();
+    if(big){                                   // twinkle spike on the brightest
+      x.strokeStyle=`rgba(255,255,255,${a*.4})`; x.lineWidth=.6;
+      x.beginPath(); x.moveTo(sx-r*2.6,sy); x.lineTo(sx+r*2.6,sy);
+      x.moveTo(sx,sy-r*2.6); x.lineTo(sx,sy+r*2.6); x.stroke();
+    }
+  }
+
+  // ---- aurora curtains ------------------------------------------------------
   x.globalCompositeOperation='lighter';
-  const cols=['#2b1f6b','#5a2170','#8e2f5e','#1d4f7a','#2f7fa0','#6a3fb5'];
-  for(let i=0;i<460;i++){
-    const u=Math.random();
-    const bx=u*W, by=H*.5+Math.sin(u*Math.PI*2.2+1.1)*H*.17+(Math.random()-.5)*H*.4;
-    const r=rnd(24,190), col=cols[(Math.random()*cols.length)|0];
-    const g=x.createRadialGradient(bx,by,0,bx,by,r);
-    g.addColorStop(0,hexA(col,rnd(.05,.15))); g.addColorStop(1,hexA(col,0));
-    x.fillStyle=g; x.beginPath(); x.arc(bx,by,r,0,7); x.fill();
+  // [bottom colour, top colour] — aurora runs green/teal low, violet/red high
+  const bands=[
+    [0x24ff9c,0x18d0ff],  // green  -> cyan
+    [0x1ee089,0x2f6bff],  // green  -> blue
+    [0x35ffd0,0x8a3cff],  // teal   -> violet
+    [0x8b45ff,0xff3ca0],  // violet -> magenta
+    [0xff9a3c,0xff3c6e],  // amber  -> rose
+    [0xffb43c,0xff5a2a],  // amber  -> deep orange
+    [0x3cf0ff,0x2b8bff],  // ice    -> blue
+  ];
+  const curtains=18;
+  for(let k=0;k<curtains;k++){
+    const pair=bands[(Math.random()*bands.length)|0];
+    _tmpCol.setHex(pair[0]); _tmpCol2.setHex(pair[1]);   // bottom / top
+    const cx=Math.random()*W, cw=rnd(70,240);
+    const topY=rnd(0,H*.30), botY=rnd(H*.46,H*.82);
+    const span=botY-topY;
+    const phase=Math.random()*7, freq=rnd(1.4,3.4)*Math.PI/span, amp=rnd(24,90);
+    const bright=rnd(.10,.24);
+    const rays=[];                                       // brighter vertical streaks
+    for(let s=0;s<Math.round(cw/28);s++) rays.push({o:rnd(-cw*.42,cw*.42),w:rnd(2,6),a:rnd(.4,1)});
+    for(let y=topY;y<botY;y+=3){
+      const t=(y-topY)/span;                             // 0 top .. 1 bottom
+      const env=Math.sin(t*Math.PI)*Math.sin(t*Math.PI); // bell — fade at both ends
+      if(env<.01) continue;
+      const wob=cx+Math.sin(y*freq+phase)*amp+Math.sin(y*freq*2.3+phase*1.7)*amp*.35;
+      // colour lerps top->bottom
+      const col=_tmpCol2.clone().lerp(_tmpCol,t);
+      const a=env*bright;
+      const g=x.createLinearGradient(wob-cw/2,0,wob+cw/2,0);
+      g.addColorStop(0,rgba(col,0)); g.addColorStop(.5,rgba(col,a)); g.addColorStop(1,rgba(col,0));
+      x.fillStyle=g; x.fillRect(wob-cw/2,y,cw,4);
+      // vertical rays inside the curtain
+      for(const ry of rays){
+        x.fillStyle=rgba(col,a*ry.a*.9);
+        x.fillRect(wob+ry.o,y,ry.w,4);
+      }
+    }
   }
-  for(let i=0;i<50;i++){                       // hot cores
-    const u=Math.random();
-    const bx=u*W, by=H*.5+Math.sin(u*Math.PI*2.2+1.1)*H*.17+(Math.random()-.5)*H*.16;
-    const r=rnd(8,40);
-    const g=x.createRadialGradient(bx,by,0,bx,by,r);
-    g.addColorStop(0,'rgba(226,214,255,.30)'); g.addColorStop(1,'rgba(226,214,255,0)');
-    x.fillStyle=g; x.beginPath(); x.arc(bx,by,r,0,7); x.fill();
-  }
+
+  // horizon glow — a broad green-cyan lift right at eye level
+  const hg=x.createLinearGradient(0,H*.44,0,H*.56);
+  hg.addColorStop(0,'rgba(20,120,90,0)'); hg.addColorStop(.5,'rgba(40,220,150,.10)');
+  hg.addColorStop(1,'rgba(20,90,120,0)');
+  x.fillStyle=hg; x.fillRect(0,H*.44,W,H*.12);
+
   x.globalCompositeOperation='source-over';
-  for(let i=0;i<1500;i++){
-    const a=Math.random()*.9+.1, r=Math.random()<.06?rnd(1.2,2.2):rnd(.4,1);
-    x.fillStyle=`rgba(255,255,255,${a})`;
-    x.beginPath(); x.arc(Math.random()*W,Math.random()*H,r,0,7); x.fill();
-  }
   return new THREE.CanvasTexture(c);
 }
 
