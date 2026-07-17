@@ -37,11 +37,16 @@
   .loc.on{color:#05070a;background:var(--accent);border-color:var(--accent)}
 
   /* vertical power bar: height on the bar = height of the shot */
+  /* vertical power/height gauge: green = on-target (under the bar), red up top =
+     over the bar. The bright band is the sweet spot; the knob is your contact. */
   #pmeter{position:absolute;right:18px;top:50%;transform:translateY(-50%);
-    width:16px;height:min(46vh,300px);border:1px solid rgba(255,255,255,.22);
-    opacity:0;transition:opacity .14s}
+    width:18px;height:min(46vh,300px);border:1px solid rgba(255,255,255,.3);border-radius:3px;
+    opacity:0;transition:opacity .14s;
+    background:linear-gradient(to top,
+      rgba(73,224,122,.32) 0%, rgba(73,224,122,.32) 66%,
+      rgba(255,196,60,.36) 74%, rgba(255,74,74,.46) 84%, rgba(255,74,74,.55) 100%)}
   #pmeter.show{opacity:1}
-  #green{position:absolute;left:0;right:0;bottom:55%;height:17%;background:var(--green);opacity:.42}
+  #green{position:absolute;left:0;right:0;bottom:55%;height:17%;background:var(--green);opacity:.6}
   #green::after{content:'';position:absolute;left:-5px;right:-5px;top:0;bottom:0;
     border-top:1px solid var(--green);border-bottom:1px solid var(--green)}
   #pknob{position:absolute;left:-6px;right:-6px;bottom:0;height:3px;background:var(--ink);
