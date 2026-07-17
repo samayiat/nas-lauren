@@ -303,7 +303,12 @@ const _rq=new THREE.Quaternion(),_rp=new THREE.Vector3(),_rd=new THREE.Vector3()
 // keeper state machine: ready -> dive -> (clutch -> rise -> punt) | land -> done
 const K={phase:'ready',t:0,pt:0,dive:0,target:0,lunge:0,ready:0,lead:'L',caught:false,landed:false,punted:false,
          timer:0,diveAt:0,armed:false,air:0,flightTime:0,
-         reach:false,tx:0,ty:0,vx:0};   // reach = "hands straight to the ball" cheat
+         reach:false,tx:0,ty:0,vx:0,pull:1};
+// reach = a guaranteed catch (he hawks the ball down). Otherwise he's only
+// PULLED a fraction (K.pull) toward the ball, so shots up the middle are saved
+// because he barely moves, and corners tug him a little but not far enough.
+const CATCH_P=0.2;              // chance of the guaranteed snatch
+const PULL_LO=0.30, PULL_HI=0.46;
 let kickAnim=-1, pendingLaunch=false;
 const clock=new THREE.Clock();
 
@@ -1540,7 +1545,7 @@ function resetShot(){
   K.phase='ready'; K.dive=0; K.target=0; K.t=0; K.pt=0; K.lunge=0; K.ready=0;
   K.caught=false; K.landed=false; K.punted=false; K.lead='L';
   K.timer=0; K.diveAt=0; K.armed=false; K.air=0;
-  K.reach=false; K.tx=0; K.ty=0; K.vx=0;
+  K.reach=false; K.tx=0; K.ty=0; K.vx=0; K.pull=1;
   ball.held=false; ball.holdE=0; ball.holdOff.set(0,0,0);
   W.keeper.position.set(0,0,KEEP_Z); groundFigure(W.keeper); W.keeper.rotation.set(0,Math.PI,0);
   W.kicker.position.set(-.5,0,2.7); groundFigure(W.kicker); W.kicker.rotation.set(0,0,0);
@@ -1619,14 +1624,13 @@ function strike(){
 function contact(){
   const green = lockedPower>=GREEN_LO && lockedPower<=GREEN_HI;
   launch();
-  // ~1/3 of the time he abandons the pre-committed guess and just throws his
-  // hands at the real ball (corners included), body riding after them. The rest
-  // keep the honest left/right/centre guess, so plenty of shots still go in.
-  K.reach = Math.random() < .34;
-  if(K.reach){
-    K.target = Math.abs(K.tx)<.25 ? 0 : Math.sign(K.tx);
-    K.lead = K.tx>=0 ? 'L' : 'R';   // dive to world +x leads with the local-L glove
-  }
+  // Either he hawks it down (a guaranteed catch, commits fully to the ball), or
+  // he's just tugged part-way toward it. Never a random wrong-way dive: he always
+  // leans toward the shot, only not far enough unless it's a catch.
+  K.reach = Math.random() < CATCH_P;
+  K.pull  = K.reach ? 1 : rnd(PULL_LO,PULL_HI);
+  K.target = Math.abs(K.tx)<.2 ? 0 : Math.sign(K.tx);   // which way he leans / leads
+  K.lead   = K.tx>=0 ? 'L' : 'R';
   // Schedule the dive so peak extension lands on the ball's arrival instead of
   // firing at the whistle. A fast, flat shot leaves him no time — as it should.
   K.diveAt = Math.max(0, K.flightTime - DIVE_DUR*.9);
@@ -1655,19 +1659,19 @@ const H=1/240;
 const _c=new THREE.Vector3(),_n=new THREE.Vector3(),_ka=new THREE.Vector3(),_kb=new THREE.Vector3();
 const _up=new THREE.Vector3(0,1,0),_fwd=new THREE.Vector3(0,0,1),_a=new THREE.Vector3();
 function keeperCapsule(){
-  if(K.reach && K.phase==='dive'){
-    // He's committed his body to the ball's line; his hands now reach off the
-    // chest toward the LIVE ball each substep (not the render-lagged glove mesh),
-    // up to an arm span. Anything inside that envelope is his. A ball flying
-    // higher/wider than he can stretch still beats him — the natural falloff is
-    // the whole imperfection, so it's a cheat, not an invincible wall.
+  if(K.phase==='dive'){
+    // His hands reach off the chest toward the LIVE ball each substep (robust to
+    // render lag). A catch gets a long, generous span so he snatches whatever he
+    // committed to; a partial pull gets a short span, so it only connects when
+    // the ball ends up near where the small tug left him (i.e. central shots).
     const sx=W.keeper.position.x;
     _ka.set(sx, heightAt(sx,KEEP_Z)+1.05+K.lunge*.4, KEEP_Z);   // chest, airborne
-    const reachLen=1.3;
+    const span=K.reach?1.4:.72, rad=K.reach?.42:.24;
     _rd.copy(ball.p).sub(_ka); const dl=_rd.length()||1;
-    _kb.copy(_ka).addScaledVector(_rd, Math.min(reachLen,dl)/dl);
-    return [_ka,_kb,.4];
+    _kb.copy(_ka).addScaledVector(_rd, Math.min(span,dl)/dl);
+    return [_ka,_kb,rad];
   }
+  // read phase (stationary at centre) — a plain vertical reach
   const kx=K.dive*2.75, tilt=keeperTilt();
   const base=_ka.set(kx-Math.sin(tilt)*.1,heightAt(kx,KEEP_Z)+.15+K.lunge*.5,KEEP_Z);
   const dir=new THREE.Vector3(Math.sin(tilt),Math.cos(tilt),0);
@@ -1923,28 +1927,20 @@ function tick(){
     K.t=clamp(K.air/DIVE_DUR,0,1);                 // extension
     const e=1-Math.pow(1-K.t,3);
     const prevx=W.keeper.position.x;
-    if(K.reach){
-      // steer him onto the ball's actual line — corners included (past the ±2.75 cap)
-      const reachMax=GOAL_W/2-.1;                  // ~3.56
-      const kx=clamp(K.tx,-reachMax,reachMax)*e;
-      K.dive=clamp(kx/2.75,-1.4,1.4);              // drives tilt + the fallback capsule
-      const hy=Math.max(0,K.ty-1.0);               // extra rise for high shots
-      K.lunge=Math.sin(clamp(K.air/DIVE_AIR,0,1)*Math.PI)*(1+hy*.5);
-      W.keeper.position.x=kx;
-      W.keeper.position.y=heightAt(kx,KEEP_Z)+K.lunge*.5+e*hy*.5;
-      W.keeper.rotation.z=keeperTilt();
-      K.vx=dt>1e-5?(kx-prevx)/dt:0;
-      poseKeeperReach();
-    } else {
-      K.dive=K.target*e;
-      K.lunge=Math.sin(clamp(K.air/DIVE_AIR,0,1)*Math.PI)*(K.target?1:.3);  // airborne arc
-      const kx=K.dive*2.75;
-      W.keeper.position.x=kx;
-      W.keeper.position.y=heightAt(kx,KEEP_Z)+K.lunge*.5;
-      W.keeper.rotation.z=keeperTilt();          // head leads the dive
-      K.vx=dt>1e-5?(kx-prevx)/dt:0;
-      poseKeeperDive();
-    }
+    // He travels a fraction K.pull of the way to the ball's line: 1.0 on a
+    // catch (full commit), a partial tug otherwise. Middle shots barely move him
+    // (so they're saved); corners drag him a little but leave him short.
+    const reachMax=GOAL_W/2-.1;                    // ~3.56
+    const kx=clamp(K.tx,-reachMax,reachMax)*K.pull*e;
+    K.dive=clamp(kx/2.75,-1.4,1.4);                // drives tilt + capsule
+    const hy=Math.max(0,K.ty-1.0);                 // extra rise for high shots
+    K.lunge=Math.sin(clamp(K.air/DIVE_AIR,0,1)*Math.PI)*(K.reach?(1+hy*.5):(Math.abs(K.dive)>.05?1:.35));
+    W.keeper.position.x=kx;
+    W.keeper.position.y=heightAt(kx,KEEP_Z)+K.lunge*.5+(K.reach?e*hy*.5:0);
+    W.keeper.rotation.z=keeperTilt();
+    K.vx=dt>1e-5?(kx-prevx)/dt:0;
+    if(K.reach) poseKeeperReach();                 // hands snatch the ball
+    else        poseKeeperDive();                  // an honest dive that may fall short
     if(K.air>=DIVE_AIR){ K.phase = K.caught ? 'clutch' : 'land'; K.pt=0; }
   }
   else if(K.phase==='clutch' || K.phase==='land'){
