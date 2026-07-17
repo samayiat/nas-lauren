@@ -4,6 +4,13 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
 <title>Spot Kick — Three Worlds</title>
+<link rel="manifest" href="manifest.webmanifest" />
+<meta name="theme-color" content="#05070a" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Spot Kick" />
+<link rel="apple-touch-icon" href="icon-192.png" />
 <style>
   :root{ --ink:#f2f5f4; --dim:rgba(242,245,244,.45); --accent:#7cf2c8; --green:#49e07a; }
   *{box-sizing:border-box;margin:0;padding:0}
@@ -79,6 +86,18 @@
     background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.16);color:var(--ink)}
   .mbtn.prime{background:var(--accent);border-color:var(--accent);color:#05070a}
   .mbtn.off{color:var(--dim)}
+  #install{position:absolute;right:14px;bottom:calc(16px + env(safe-area-inset-bottom));
+    pointer-events:auto;display:none;align-items:center;gap:6px;height:40px;padding:0 14px;
+    border:1px solid var(--accent);background:rgba(0,0,0,.4);color:var(--accent);border-radius:2px;
+    font:inherit;font-size:9px;letter-spacing:.16em;text-transform:uppercase;cursor:pointer;
+    backdrop-filter:blur(8px)}
+  #install.show{display:inline-flex}
+  #ioshint{position:absolute;left:50%;bottom:66px;transform:translateX(-50%);max-width:270px;
+    display:none;background:rgba(4,6,9,.93);border:1px solid rgba(255,255,255,.18);border-radius:4px;
+    padding:12px 14px;font-size:10px;line-height:1.7;color:var(--ink);pointer-events:auto;
+    backdrop-filter:blur(8px);text-align:center}
+  #ioshint.show{display:block}
+  #ioshint b{color:var(--accent)}
   #err{position:absolute;left:8px;right:8px;bottom:70px;font-size:10px;color:#ff8a8a;
     background:rgba(0,0,0,.7);padding:6px;display:none;white-space:pre-wrap}
   @media (prefers-reduced-motion:reduce){#verdict.pop{animation-duration:.01s}}
@@ -99,6 +118,8 @@
   <div id="pmeter"><div id="green"></div><div id="pknob"></div></div>
   <div id="verdict"></div><div id="flash"></div><div id="err"></div>
   <button id="pausebtn">&#10074;&#10074;</button>
+  <button id="install">&#8615;&nbsp;Install</button>
+  <div id="ioshint">To install, tap the <b>Share</b> icon, then <b>Add to Home Screen</b>.</div>
   <div id="menu">
     <div class="panel">
       <div class="np"><img id="npart" alt="cover"/>
@@ -138,8 +159,8 @@ const LOCALES={
     gravity:-1.62, buoy:0, drag:0, curve:.35, flightMul:1.0, ballColor:0xffffff, ballRough:.55,
     gold:false, ground:0x4c4a46, amb:[0x2a2c44,.4], key:[0xfff4e2,1.7], mound:3.2,
     motes:{n:70,c:0xdad6cc,s:.03,rise:.05,drift:.03}, puff:0xbdb9b0 },
-  money:{ name:'The Pile', tag:'liquidity: high', accent:'#ffd36b', bg:0x120d05, fog:[0x1d1305,.016],
-    gravity:-9.81, buoy:0, drag:.22, curve:.9, flightMul:.9, ballColor:0xffc33a, ballRough:.18,
+  money:{ name:'The Pile', tag:'liquidity: high', accent:'#ffe14d', bg:0x120d05, fog:[0x1d1305,.016],
+    gravity:-9.81, buoy:0, drag:.22, curve:.9, flightMul:.9, ballColor:0xffe23a, ballRough:.08,
     gold:true, ground:0x1d4429, amb:[0x6b4a12,.5], key:[0xfff0c0,1.35], mound:5.0,
     motes:{n:110,c:0x9fd7a6,s:.14,rise:-.45,drift:.35}, puff:0xd8f0c9 }
 };
@@ -535,7 +556,8 @@ function build(key){
   }
 
   W.frameMat=L.gold
-    ?new THREE.MeshStandardMaterial({color:0xffc83c,metalness:1,roughness:.16})
+    ?new THREE.MeshStandardMaterial({color:0xffe64d,metalness:1,roughness:.07,
+        envMap:goldEnvTexture(),envMapIntensity:2.1,emissive:0x4a3400,emissiveIntensity:.25})
     :new THREE.MeshStandardMaterial({color:0xf6f8fa,metalness:.25,roughness:.4});
   const bar=(len,h)=>{const m=new THREE.Mesh(new THREE.CylinderGeometry(POST_R,POST_R,len,14),W.frameMat);
     m.castShadow=true; if(h)m.rotation.z=Math.PI/2; return m;};
@@ -557,8 +579,9 @@ function build(key){
   [-1,1].forEach(s=>{const sn=new THREE.Mesh(new THREE.PlaneGeometry(1.15,GOAL_H,3,8),netMat);
     sn.rotation.y=Math.PI/2; sn.position.set(s*GOAL_W/2,GOAL_H/2,GOAL_Z-.575); scene.add(sn);});
 
-  const b=new THREE.Mesh(new THREE.SphereGeometry(BALL_R,26,20),
-    new THREE.MeshStandardMaterial({color:L.ballColor,roughness:L.ballRough,metalness:L.gold?1:.05}));
+  const ballMat=new THREE.MeshStandardMaterial({color:L.ballColor,roughness:L.ballRough,metalness:L.gold?1:.05});
+  if(L.gold){ ballMat.envMap=goldEnvTexture(); ballMat.envMapIntensity=2.1; ballMat.emissive=new THREE.Color(0x4a3400); ballMat.emissiveIntensity=.3; }
+  const b=new THREE.Mesh(new THREE.SphereGeometry(BALL_R,26,20),ballMat);
   b.castShadow=true; scene.add(b); W.ball=b;
   b.add(new THREE.Mesh(new THREE.SphereGeometry(BALL_R+.002,10,7),
     new THREE.MeshBasicMaterial({color:L.gold?0xa06e00:0x1b1f24,wireframe:true,transparent:true,opacity:.4})));
@@ -1000,8 +1023,10 @@ function buildMoney(){
     }
     scene.add(im);
   });
-  // --- bullion and coin, salted through it
-  const goldMat=new THREE.MeshStandardMaterial({color:0xffc33a,metalness:1,roughness:.24});
+  // --- bullion and coin, salted through it. The envMap is the bright fake
+  //     reflection world — only the metal picks it up, so the pitch stays dark.
+  const goldMat=new THREE.MeshStandardMaterial({color:0xffe23a,metalness:1,roughness:.13,
+    envMap:goldEnvTexture(),envMapIntensity:2.0,emissive:0x3a2a00,emissiveIntensity:.15});
   const bars=new THREE.InstancedMesh(new THREE.BoxGeometry(.46,.17,.26),goldMat,110);
   bars.castShadow=true;
   for(let i=0;i<110;i++){
@@ -1043,6 +1068,26 @@ function buildMoney(){
       m.compose(v,q,one); fly.setMatrixAt(i,m);
     });
     fly.instanceMatrix.needsUpdate=true;
+  });
+
+  // --- sparkle: twinkling additive glints strewn over the near pile, plus a
+  //     beat-driven emissive pulse so the whole hoard flares on the kick drum
+  const sparks=[];
+  const stex=glowTexture();
+  for(let i=0;i<80;i++){
+    const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:stex,color:0xffef9a,
+      transparent:true,opacity:0,blending:THREE.AdditiveBlending,depthWrite:false}));
+    const r=Math.sqrt(rnd(.02,1))*17, a=rnd(0,Math.PI*2), sx=Math.cos(a)*r, sz=Math.sin(a)*r-4;
+    sp.position.set(sx,heightAt(sx,sz)+.14,sz); sp.scale.setScalar(rnd(.16,.4));
+    sp.userData={ph:rnd(0,7),sp:rnd(2.4,6.5)}; scene.add(sp); sparks.push(sp);
+  }
+  W.tickers.push((dt,t)=>{
+    goldMat.emissiveIntensity=.1+bass*.55+beat*.25;
+    for(const s of sparks){
+      const tw=Math.sin(t*s.userData.sp+s.userData.ph);
+      const f=Math.max(0,tw*tw*tw);            // cubed -> brief, sharp flashes
+      s.material.opacity=f*(.55+beat*.6);
+    }
   });
 }
 
@@ -1140,6 +1185,35 @@ function nebulaTexture(){
 
   x.globalCompositeOperation='source-over';
   return new THREE.CanvasTexture(c);
+}
+
+/* A fake reflection world for the gold. Pure-metal PBR reflects its
+   surroundings, and the pitch is dark, so untouched gold reads as near-black.
+   Dropping this bright, warm equirect map into scene.environment gives every
+   coin, bar, post and the ball a hot golden sheen plus pinpoint sparkles to
+   catch as they turn — the whole "cheat" for gleam. */
+let _goldEnv=null;
+function goldEnvTexture(){
+  if(_goldEnv) return _goldEnv;
+  const W=1024,H=512, c=document.createElement('canvas'); c.width=W; c.height=H;
+  const x=c.getContext('2d');
+  const g=x.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#fff7da'); g.addColorStop(.34,'#ffe07e'); g.addColorStop(.5,'#d69626');
+  g.addColorStop(.62,'#3d2708'); g.addColorStop(1,'#0a0703');
+  x.fillStyle=g; x.fillRect(0,0,W,H);
+  // a hot sun for a strong moving specular streak
+  const sun=x.createRadialGradient(W*.5,H*.28,0,W*.5,H*.28,190);
+  sun.addColorStop(0,'#ffffff'); sun.addColorStop(.4,'rgba(255,244,200,.92)'); sun.addColorStop(1,'rgba(255,244,200,0)');
+  x.fillStyle=sun; x.beginPath(); x.arc(W*.5,H*.28,190,0,7); x.fill();
+  // sparkle specks — coins catch these as bright pinpoint glints
+  x.globalCompositeOperation='lighter';
+  for(let i=0;i<200;i++){ const r=rnd(1,4.5);
+    x.fillStyle=`rgba(255,${(205+rnd(0,50))|0},${(140+rnd(0,80))|0},${rnd(.5,1)})`;
+    x.beginPath(); x.arc(Math.random()*W,Math.random()*H*.72,r,0,7); x.fill(); }
+  x.globalCompositeOperation='source-over';
+  _goldEnv=new THREE.CanvasTexture(c);
+  _goldEnv.mapping=THREE.EquirectangularReflectionMapping;
+  return _goldEnv;
 }
 
 // ------------------------------------------------------------------ juice
@@ -1896,9 +1970,57 @@ document.getElementById('mute').addEventListener('click',e=>{
 document.getElementById('vol').addEventListener('input',e=>{ setVol(e.target.value/100); });
 window.addEventListener('keydown',e=>{ if(e.key==='Escape'||e.key==='p') setPaused(!paused); });
 
-// first touch anywhere unlocks audio — browsers require a gesture
-window.addEventListener('pointerdown',()=>{ if(!musicOn) startMusic(); },{capture:true});
-window.addEventListener('touchstart',()=>{ if(!musicOn) startMusic(); },{capture:true});
+// first touch anywhere unlocks audio — browsers require a gesture. On a return
+// visit the tab may have been backgrounded, which suspends the AudioContext;
+// browsers won't let it resume() outside a gesture, so a tap resumes it here.
+function unlockAudio(){
+  if(!musicOn){ startMusic(); return; }
+  if(actx && actx.state==='suspended') actx.resume();
+  if(usingEl && musicOn && tune.paused && !paused){ const q=tune.play(); if(q&&q.catch)q.catch(()=>{}); }
+}
+window.addEventListener('pointerdown',unlockAudio,{capture:true});
+window.addEventListener('touchstart',unlockAudio,{capture:true});
+
+// Leaving the tab/app pauses the game so the deck spins down instead of the
+// track silently dying in the background. Coming back leaves it paused (menu up)
+// so the next tap — a real gesture — reliably restarts the audio.
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden){ if(!paused) setPaused(true); }
+  else if(actx && actx.state==='suspended' && !paused) actx.resume();
+});
+window.addEventListener('pagehide',()=>{ if(!paused) setPaused(true); });
+
+/* ---- install to home screen -------------------------------------------------
+   Chrome/Edge/Android fire beforeinstallprompt; we stash it and drive the
+   native sheet from our own button. iOS never fires it, so there we just show
+   the manual Share -> Add to Home Screen hint. Hidden once the app is running
+   standalone (already installed). ---- */
+(function(){
+  const installBtn=document.getElementById('install');
+  const iosHint=document.getElementById('ioshint');
+  const standalone=matchMedia('(display-mode: standalone)').matches||navigator.standalone===true;
+  const isIOS=/iphone|ipad|ipod/i.test(navigator.userAgent)
+           ||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+  let deferred=null;
+  window.addEventListener('beforeinstallprompt',e=>{
+    e.preventDefault(); deferred=e; if(!standalone) installBtn.classList.add('show');
+  });
+  window.addEventListener('appinstalled',()=>{
+    installBtn.classList.remove('show'); iosHint.classList.remove('show'); deferred=null;
+  });
+  installBtn.addEventListener('click',async e=>{
+    e.stopPropagation();
+    if(deferred){
+      deferred.prompt();
+      const c=await deferred.userChoice; deferred=null;
+      if(c&&c.outcome==='accepted') installBtn.classList.remove('show');
+    } else { iosHint.classList.toggle('show'); }
+  });
+  document.addEventListener('click',e=>{ if(!installBtn.contains(e.target)) iosHint.classList.remove('show'); },true);
+  if(isIOS && !standalone) installBtn.classList.add('show');   // no prompt event on iOS
+  if('serviceWorker' in navigator)
+    window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
+})();
 
 document.getElementById('npart').src=COVER_B64;
 setVol(vol);
