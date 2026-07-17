@@ -298,9 +298,12 @@ let flightT=0,woodwork=false,resolved=false;
 const ball={p:new THREE.Vector3(),v:new THREE.Vector3(),accX:0,live:false,
             held:false,holdOff:new THREE.Vector3(),holdE:0};
 const _g1=new THREE.Vector3(),_g2=new THREE.Vector3(),_gm=new THREE.Vector3();
+const _rq=new THREE.Quaternion(),_rp=new THREE.Vector3(),_rd=new THREE.Vector3(),
+      _rpq=new THREE.Quaternion(),_rDown=new THREE.Vector3(0,-1,0);   // arm-to-ball IK temps
 // keeper state machine: ready -> dive -> (clutch -> rise -> punt) | land -> done
 const K={phase:'ready',t:0,pt:0,dive:0,target:0,lunge:0,ready:0,lead:'L',caught:false,landed:false,punted:false,
-         timer:0,diveAt:0,armed:false,air:0,flightTime:0};
+         timer:0,diveAt:0,armed:false,air:0,flightTime:0,
+         reach:false,tx:0,ty:0,vx:0};   // reach = "hands straight to the ball" cheat
 let kickAnim=-1, pendingLaunch=false;
 const clock=new THREE.Clock();
 
@@ -404,8 +407,13 @@ const Pose={
   shoulderSpread:(j,s,a)=> j.shoulders[s].rotation.z = (s==='L'?-a:a),
   elbowBend: (j,s,a)=> j.elbows[s].rotation.x = a,      // a>=0 hand forward
   leanForward:(j,a)=> j.upper.rotation.x = -a,
-  crouch:    (j,a)=> j.pelvis.position.y = HIP_Y - a
+  crouch:    (j,a)=> j.pelvis.position.y = HIP_Y - a,
+  sideBend:  (j,a)=> j.upper.rotation.z = a,            // torso tips toward +x
+  twist:     (j,a)=> j.upper.rotation.y = a,            // torso rotates about spine
+  handBend:  (j,s,a)=> j.hands[s].rotation.x = a        // wrist/glove flick
 };
+// easeOutBack — overshoots past 1 near the end, so limbs snap out and settle
+const backOut=(x)=>{const c=1.9; return 1+(c+1)*Math.pow(x-1,3)+c*Math.pow(x-1,2);};
 
 function makeFigure(skin,kit,isKeeper){
   const root=new THREE.Group();
@@ -590,12 +598,20 @@ function build(key){
   W.keeper=makeFigure(0xe8e4dc,L.gold?0x7a5200:0xe2483f,true);
   W.keeper.rotation.y=Math.PI; scene.add(W.keeper);
 
-  // arrow points +Z so lookAt(target) is exact and can never be mirrored
-  W.arrowMat=new THREE.MeshBasicMaterial({color:new THREE.Color(L.accent),transparent:true,opacity:.85});
+  // arrow points +Z so lookAt(target) is exact and can never be mirrored.
+  // A dark outline layer sits just under a brighter fill + white tip so the
+  // arrow reads on ANY ground — the pale-lavender-on-grey (moon) and
+  // yellow-on-bright-money pairings were washing the flat decal right out.
+  W.arrowMat=new THREE.MeshBasicMaterial({color:new THREE.Color(L.accent),transparent:true,opacity:.95,depthWrite:false});
+  W.arrowTipMat=new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:.95,depthWrite:false});
+  const outMat=new THREE.MeshBasicMaterial({color:0x05070a,transparent:true,opacity:.7,depthWrite:false});
   const arrow=new THREE.Group();
-  const sh=new THREE.Mesh(new THREE.BoxGeometry(.1,.02,2.1),W.arrowMat); sh.position.z=1.25;
-  const hd=new THREE.Mesh(new THREE.ConeGeometry(.2,.5,4),W.arrowMat); hd.rotation.x=Math.PI/2; hd.position.z=2.5;
-  arrow.add(sh,hd); arrow.visible=false; scene.add(arrow); W.arrow=arrow;
+  // outline: fatter, drawn first and a hair lower, so a dark rim wraps the fill
+  const osh=new THREE.Mesh(new THREE.BoxGeometry(.24,.02,2.36),outMat); osh.position.set(0,-.012,1.25); osh.renderOrder=1;
+  const ohd=new THREE.Mesh(new THREE.ConeGeometry(.35,.74,4),outMat); ohd.rotation.x=Math.PI/2; ohd.position.set(0,-.012,2.55); ohd.renderOrder=1;
+  const sh=new THREE.Mesh(new THREE.BoxGeometry(.12,.02,2.1),W.arrowMat); sh.position.z=1.25; sh.renderOrder=2;
+  const hd=new THREE.Mesh(new THREE.ConeGeometry(.2,.5,4),W.arrowTipMat); hd.rotation.x=Math.PI/2; hd.position.z=2.5; hd.renderOrder=2;
+  arrow.add(osh,ohd,sh,hd); arrow.visible=false; scene.add(arrow); W.arrow=arrow;
 
   W.parts=[]; const pGeo=new THREE.SphereGeometry(.07,6,5);
   for(let i=0;i<340;i++){const p=new THREE.Mesh(pGeo,new THREE.MeshBasicMaterial({color:0xffffff,transparent:true}));
@@ -1291,6 +1307,8 @@ function poseKeeperReady(stance,bob){
   const j=W.keeper.userData.j;
   Pose.crouch(j,.22*stance+bob*.012);
   Pose.leanForward(j,.18*stance);
+  Pose.twist(j,0); Pose.sideBend(j,bob*.006);        // neutral spine; tiny idle sway
+  Pose.handBend(j,'L',0); Pose.handBend(j,'R',0);
   Pose.hipSpread(j,'L',.16*stance); Pose.hipSpread(j,'R',.16*stance);
   ikLeg(W.keeper,'L',-.05*stance,ANKLE_Y);
   ikLeg(W.keeper,'R',-.05*stance,ANKLE_Y);
@@ -1309,21 +1327,63 @@ function poseKeeperReady(stance,bob){
 function keeperTilt(){ return K.dive*1.2; }              // world lean, +x = toward +x
 
 function poseKeeperDive(){
-  const j=W.keeper.userData.j, ad=Math.abs(K.dive);
+  const j=W.keeper.userData.j, ad=Math.abs(K.dive), sgn=Math.sign(K.dive)||1;
+  // secondary motion: the sideways velocity of the dive whips the trailing limbs,
+  // and on landing it decays into a damped flop so he doesn't freeze mid-air.
+  const vx=K.vx||0, land=(K.phase==='land'||K.phase==='clutch');
+  const flop=land?Math.sin(K.pt*22)*Math.exp(-K.pt*7)*.5:0;
+  const lag=clamp(vx*.06,-.7,.7);
   Pose.crouch(j,.1);
   Pose.leanForward(j,.12);
-  // legs trail behind the dive
+  Pose.twist(j,-sgn*ad*.34 - vx*.03);                 // torso rotates into the dive
+  Pose.sideBend(j, sgn*ad*.2 + flop);                 // and tips over — not a plank
+  // legs trail behind, lagging more the faster he travels
   Pose.hipSpread(j,'L',.2*ad); Pose.hipSpread(j,'R',.2*ad);
-  Pose.hipSwing(j,'L',-.5*ad); Pose.hipSwing(j,'R',-.28*ad);
-  Pose.kneeBend(j,'L',1.05*ad); Pose.kneeBend(j,'R',.7*ad);
-  // lead arm spears out ahead of the head; trail arm follows to meet the ball
-  const lead=K.lead, trail=lead==='L'?'R':'L';
-  Pose.shoulderSpread(j,lead, lerp(.98,1.78,ad));
-  Pose.elbowBend(j,lead, lerp(1.35,.06,K.t));
-  Pose.shoulderSwing(j,lead,.30);
+  Pose.hipSwing(j,'L',-.5*ad - lag*sgn + flop*.6); Pose.hipSwing(j,'R',-.28*ad - lag*sgn - flop*.6);
+  Pose.kneeBend(j,'L',1.05*ad + flop); Pose.kneeBend(j,'R',.7*ad - flop);
+  // lead arm spears out with an overshoot; trail arm follows loosely
+  const lead=K.lead, trail=lead==='L'?'R':'L', ext=backOut(K.t);
+  Pose.shoulderSpread(j,lead, lerp(.98,1.82,ad)*(.92+ext*.08));
+  Pose.elbowBend(j,lead, lerp(1.35,-.05,ext));
+  Pose.shoulderSwing(j,lead,.30 - vx*.02);
+  Pose.handBend(j,lead, lerp(.25,-.4,K.t)+flop);      // glove flicks loose
   Pose.shoulderSpread(j,trail, lerp(.98,1.15,ad));
-  Pose.elbowBend(j,trail, lerp(1.35,.55,K.t));
-  Pose.shoulderSwing(j,trail,.72);
+  Pose.elbowBend(j,trail, lerp(1.35,.5,K.t)+flop*.5);
+  Pose.shoulderSwing(j,trail,.72 - lag*.3);
+  Pose.handBend(j,trail, flop);
+}
+/* Point one arm straight at the ball. The rig's arm hangs along local -Y, so we
+   rotate the shoulder so that -Y lands on the shoulder->ball direction, then
+   straighten the elbow so the whole limb (and glove) spears at the ball. Slerp
+   toward it so the arm eases/whips rather than snapping. Cosmetic — the capsule
+   decides the save — but it sells "hands go to the ball, body rides along". */
+function aimArmAtBall(side,blend){
+  const j=W.keeper.userData.j, sho=j.shoulders[side];
+  sho.getWorldPosition(_rp);
+  _rd.copy(ball.p).sub(_rp);
+  if(_rd.lengthSq()<1e-6) return;
+  _rd.normalize();
+  sho.parent.getWorldQuaternion(_rpq).invert();
+  _rd.applyQuaternion(_rpq);                       // ball dir in the shoulder's frame
+  _rq.setFromUnitVectors(_rDown,_rd);
+  sho.quaternion.slerp(_rq,blend);
+  Pose.elbowBend(j,side,.05);                      // forearm straight along the aim
+  Pose.handBend(j,side,-.12);
+}
+function poseKeeperReach(){
+  const j=W.keeper.userData.j, sgn=Math.sign(K.dive)||1, vx=K.vx||0;
+  const land=(K.phase==='land'||K.phase==='clutch');
+  const flop=land?Math.sin(K.pt*20)*Math.exp(-K.pt*7)*.45:0;
+  Pose.crouch(j,.08);
+  Pose.leanForward(j,.14);
+  Pose.twist(j,-sgn*.4 - vx*.03);                  // torso wheels around after the hands
+  Pose.sideBend(j, sgn*.26 + flop);
+  Pose.hipSpread(j,'L',.24); Pose.hipSpread(j,'R',.24);
+  Pose.hipSwing(j,'L',-.55 - clamp(vx*.05,-.5,.5)*sgn + flop*.6);
+  Pose.hipSwing(j,'R',-.32 - clamp(vx*.05,-.5,.5)*sgn - flop*.6);
+  Pose.kneeBend(j,'L',1.1+flop); Pose.kneeBend(j,'R',.8-flop);
+  aimArmAtBall(K.lead, land?.35:.6);               // lead glove drives to the ball
+  aimArmAtBall(K.lead==='L'?'R':'L', land?.28:.4); // trail chases loosely
 }
 // caught it — both gloves wrap the ball and hug it in
 function poseKeeperClutch(e){
@@ -1402,12 +1462,13 @@ function resetShot(){
   K.phase='ready'; K.dive=0; K.target=0; K.t=0; K.pt=0; K.lunge=0; K.ready=0;
   K.caught=false; K.landed=false; K.punted=false; K.lead='L';
   K.timer=0; K.diveAt=0; K.armed=false; K.air=0;
+  K.reach=false; K.tx=0; K.ty=0; K.vx=0;
   ball.held=false; ball.holdE=0; ball.holdOff.set(0,0,0);
   W.keeper.position.set(0,0,KEEP_Z); groundFigure(W.keeper); W.keeper.rotation.set(0,Math.PI,0);
   W.kicker.position.set(-.5,0,2.7); groundFigure(W.kicker); W.kicker.rotation.set(0,0,0);
-  [W.keeper,W.kicker].forEach(f=>{const j=f.userData.j;
+  [W.keeper,W.kicker].forEach(f=>{const j=f.userData.j; j.upper.rotation.set(0,0,0);
     ['L','R'].forEach(s=>{j.hips[s].rotation.set(0,0,0);j.knees[s].rotation.set(0,0,0);
-      j.shoulders[s].rotation.set(0,0,0);j.elbows[s].rotation.set(0,0,0);});});
+      j.shoulders[s].rotation.set(0,0,0);j.elbows[s].rotation.set(0,0,0);j.hands[s].rotation.set(0,0,0);});});
   kickAnim=-1;
   document.getElementById('pmeter').classList.remove('show');
   document.getElementById('pknob').classList.remove('locked');
@@ -1456,6 +1517,7 @@ function launch(){
   K.flightTime=T;                                   // the keeper dives against this
   const targetX=Math.tan(aimAngle)*(SPOT.z-GOAL_Z);
   const targetY=powerToHeight(p);
+  K.tx=targetX; K.ty=targetY;                       // where the shot is actually going
   const k=L.drag*.35;
   ball.accX = -Math.sin(aimAngle)*L.curve*3.4;        // the bend, as a known accel
   const a=new THREE.Vector3(ball.accX, L.gravity+L.buoy, 0);
@@ -1479,6 +1541,14 @@ function strike(){
 function contact(){
   const green = lockedPower>=GREEN_LO && lockedPower<=GREEN_HI;
   launch();
+  // ~1/3 of the time he abandons the pre-committed guess and just throws his
+  // hands at the real ball (corners included), body riding after them. The rest
+  // keep the honest left/right/centre guess, so plenty of shots still go in.
+  K.reach = Math.random() < .34;
+  if(K.reach){
+    K.target = Math.abs(K.tx)<.25 ? 0 : Math.sign(K.tx);
+    K.lead = K.tx>=0 ? 'L' : 'R';   // dive to world +x leads with the local-L glove
+  }
   // Schedule the dive so peak extension lands on the ball's arrival instead of
   // firing at the whistle. A fast, flat shot leaves him no time — as it should.
   K.diveAt = Math.max(0, K.flightTime - DIVE_DUR*.9);
@@ -1507,6 +1577,19 @@ const H=1/240;
 const _c=new THREE.Vector3(),_n=new THREE.Vector3(),_ka=new THREE.Vector3(),_kb=new THREE.Vector3();
 const _up=new THREE.Vector3(0,1,0),_fwd=new THREE.Vector3(0,0,1),_a=new THREE.Vector3();
 function keeperCapsule(){
+  if(K.reach && K.phase==='dive'){
+    // He's committed his body to the ball's line; his hands now reach off the
+    // chest toward the LIVE ball each substep (not the render-lagged glove mesh),
+    // up to an arm span. Anything inside that envelope is his. A ball flying
+    // higher/wider than he can stretch still beats him — the natural falloff is
+    // the whole imperfection, so it's a cheat, not an invincible wall.
+    const sx=W.keeper.position.x;
+    _ka.set(sx, heightAt(sx,KEEP_Z)+1.05+K.lunge*.4, KEEP_Z);   // chest, airborne
+    const reachLen=1.3;
+    _rd.copy(ball.p).sub(_ka); const dl=_rd.length()||1;
+    _kb.copy(_ka).addScaledVector(_rd, Math.min(reachLen,dl)/dl);
+    return [_ka,_kb,.4];
+  }
   const kx=K.dive*2.75, tilt=keeperTilt();
   const base=_ka.set(kx-Math.sin(tilt)*.1,heightAt(kx,KEEP_Z)+.15+K.lunge*.5,KEEP_Z);
   const dir=new THREE.Vector3(Math.sin(tilt),Math.cos(tilt),0);
@@ -1699,9 +1782,10 @@ function tick(){
     aimT+=raw*1.9;
     aimAngle=Math.sin(aimT)*AIM_MAX;
     // arrow aims at the exact point the ball is solved to hit
-    W.arrow.position.set(ball.p.x,.05,ball.p.z);
-    W.arrow.lookAt(Math.tan(aimAngle)*(SPOT.z-GOAL_Z),.05,GOAL_Z);
-    W.arrowMat.opacity=.6+Math.sin(t*9)*.18;
+    W.arrow.position.set(ball.p.x,.06,ball.p.z);
+    W.arrow.lookAt(Math.tan(aimAngle)*(SPOT.z-GOAL_Z),.06,GOAL_Z);
+    const ap=.85+Math.sin(t*9)*.12;             // brighter, tighter pulse (~.73–.97)
+    W.arrowMat.opacity=ap; if(W.arrowTipMat) W.arrowTipMat.opacity=ap;
     const far=W.kicker.position.z-1.9;
     W.kicker.position.z=lerp(W.kicker.position.z,1.9,.05);
     W.kicker.position.x=lerp(W.kicker.position.x,-.42,.05);
@@ -1760,13 +1844,29 @@ function tick(){
     K.air+=dt;
     K.t=clamp(K.air/DIVE_DUR,0,1);                 // extension
     const e=1-Math.pow(1-K.t,3);
-    K.dive=K.target*e;
-    K.lunge=Math.sin(clamp(K.air/DIVE_AIR,0,1)*Math.PI)*(K.target?1:.3);  // airborne arc
-    const kx=K.dive*2.75;
-    W.keeper.position.x=kx;
-    W.keeper.position.y=heightAt(kx,KEEP_Z)+K.lunge*.5;
-    W.keeper.rotation.z=keeperTilt();          // head leads the dive
-    poseKeeperDive();
+    const prevx=W.keeper.position.x;
+    if(K.reach){
+      // steer him onto the ball's actual line — corners included (past the ±2.75 cap)
+      const reachMax=GOAL_W/2-.1;                  // ~3.56
+      const kx=clamp(K.tx,-reachMax,reachMax)*e;
+      K.dive=clamp(kx/2.75,-1.4,1.4);              // drives tilt + the fallback capsule
+      const hy=Math.max(0,K.ty-1.0);               // extra rise for high shots
+      K.lunge=Math.sin(clamp(K.air/DIVE_AIR,0,1)*Math.PI)*(1+hy*.5);
+      W.keeper.position.x=kx;
+      W.keeper.position.y=heightAt(kx,KEEP_Z)+K.lunge*.5+e*hy*.5;
+      W.keeper.rotation.z=keeperTilt();
+      K.vx=dt>1e-5?(kx-prevx)/dt:0;
+      poseKeeperReach();
+    } else {
+      K.dive=K.target*e;
+      K.lunge=Math.sin(clamp(K.air/DIVE_AIR,0,1)*Math.PI)*(K.target?1:.3);  // airborne arc
+      const kx=K.dive*2.75;
+      W.keeper.position.x=kx;
+      W.keeper.position.y=heightAt(kx,KEEP_Z)+K.lunge*.5;
+      W.keeper.rotation.z=keeperTilt();          // head leads the dive
+      K.vx=dt>1e-5?(kx-prevx)/dt:0;
+      poseKeeperDive();
+    }
     if(K.air>=DIVE_AIR){ K.phase = K.caught ? 'clutch' : 'land'; K.pt=0; }
   }
   else if(K.phase==='clutch' || K.phase==='land'){
