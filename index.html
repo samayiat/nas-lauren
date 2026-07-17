@@ -165,7 +165,12 @@ renderer.toneMapping=THREE.ACESFilmicToneMapping; renderer.toneMappingExposure=1
 document.body.appendChild(renderer.domElement);
 const camera=new THREE.PerspectiveCamera(52,innerWidth/innerHeight,.1,400);
 const CAM_HOME=new THREE.Vector3(0,4.2,7.2), CAM_LOOK=new THREE.Vector3(0,1.0,-5);
+// intro flyaround: on every locale switch the camera orbits the pitch once to
+// show the world, then decelerates and locks behind the ball facing the goal
 let scene,W={};
+let introT=0, introActive=false; const INTRO_DUR=2.7;
+const INTRO_PIVOT=new THREE.Vector3(0,1.1,0.4);
+const _camP=new THREE.Vector3(), _camL=new THREE.Vector3();
 
 /* ===== post-processing =====================================================
    Hand-rolled. three r128's EffectComposer lives in examples/, which the
@@ -589,6 +594,7 @@ function build(key){
   buildRings();
   buildDeck();
   resetShot();
+  introT=0; introActive=true;      // spin the world into view, then lock on the goal
 }
 
 /* ---- The record player. Same rig, same spot, every locale — it is the one
@@ -1004,11 +1010,16 @@ function buildMoney(){
     q.setFromEuler(e); m.compose(v,q,one); bars.setMatrixAt(i,m);
   }
   scene.add(bars);
-  const coins=new THREE.InstancedMesh(new THREE.CylinderGeometry(.14,.14,.028,16),goldMat,260);
+  const NCOIN=1400;
+  const coins=new THREE.InstancedMesh(new THREE.CylinderGeometry(.14,.14,.028,16),goldMat,NCOIN);
   coins.castShadow=true;
-  for(let i=0;i<260;i++){
-    const r=rnd(1.5,26), a=rnd(0,Math.PI*2), x=Math.cos(a)*r, z=Math.sin(a)*r-4;
-    v.set(x,heightAt(x,z)+.04,z); e.set(rnd(-.5,.5),rnd(0,7),rnd(-.5,.5));
+  for(let i=0;i<NCOIN;i++){
+    // bias toward the pitch: sqrt gives a denser carpet up close, thinning out
+    const r=Math.sqrt(rnd(.02,1))*30, a=rnd(0,Math.PI*2), x=Math.cos(a)*r, z=Math.sin(a)*r-4;
+    // some coins lie flat and stack, others tumble on edge, so it reads as a heap
+    const flat=Math.random()<.6;
+    v.set(x,heightAt(x,z)+.02+rnd(0,.18),z);
+    e.set(flat?rnd(-.25,.25):rnd(-1.4,1.4),rnd(0,7),flat?rnd(-.25,.25):rnd(-1.4,1.4));
     q.setFromEuler(e); m.compose(v,q,one); coins.setMatrixAt(i,m);
   }
   scene.add(coins);
@@ -1338,6 +1349,7 @@ function powerToHeight(p){
 }
 
 function onDown(){
+  if(introActive) return;          // no kicking until the flyaround locks on
   if(state===S.SET){ state=S.AIM; aimT=0; aimStart=performance.now(); armed=false;
     W.arrow.visible=true; shake+=.1; setPrompt(); }
   else if(state===S.AIM && armed){ lockAim(); }
@@ -1792,6 +1804,25 @@ function tick(){
   if(W.kelp) W.kelp.forEach(k=>k.rotation.z=Math.sin(t*.8+k.userData.ph)*.14);
   if(W.earth) W.earth.rotation.y+=raw*.05;
   if(LKEY==='deep') W.key.intensity=L.key[1]+Math.sin(t*2.3)*.25+Math.sin(t*5.1)*.12;
+
+  if(introActive){
+    introT+=raw;
+    const p=clamp(introT/INTRO_DUR,0,1);
+    const ease=1-Math.pow(1-p,3);                     // easeOutCubic — decelerate
+    // ~1.25 turns, unwinding to angle 0 (which sits behind the ball at +Z = home)
+    const ang=(1-ease)*(-1.25*Math.PI*2);
+    const R=lerp(12.5,7.2,ease), H=lerp(3.4,4.2,ease);
+    _camP.set(INTRO_PIVOT.x+Math.sin(ang)*R, H, INTRO_PIVOT.z+Math.cos(ang)*R);
+    _camL.copy(INTRO_PIVOT).lerp(CAM_LOOK,ease*.7);
+    // over the final stretch, blend exactly onto the home rig so the handoff is seamless
+    const b=smooth(.7,1,p);
+    _camP.lerp(CAM_HOME,b); _camL.lerp(CAM_LOOK,b);
+    camera.position.copy(_camP); camera.rotation.z=0; camera.lookAt(_camL);
+    if(p>=1) introActive=false;
+    fovPunch=lerp(fovPunch,0,1-Math.pow(.001,raw));
+    camera.fov=52+fovPunch; camera.updateProjectionMatrix();
+    renderFrame(); return;
+  }
 
   const follow=state===S.FLIGHT?clamp((0-ball.p.z)/11,0,1):0;
   camera.position.set(lerp(CAM_HOME.x,ball.p.x*.5,follow*.6),
